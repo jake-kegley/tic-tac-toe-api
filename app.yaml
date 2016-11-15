@@ -1,0 +1,28 @@
+application:
+version: 1
+runtime: python27
+threadsafe: true
+api_version: 1
+
+handlers:
+-url: /favicon\.ico
+ static_files: favicon.ico
+ upload: favicon\.ico
+-url: /js
+ static_dir: static/js
+-url: /css
+ static_dir: static/css
+-url: /images
+ static_dir: static/images
+-url: /
+ static_files: templates/tictactoe\.html
+ secure: always
+
+# Endpoint Handlers 
+-url: /_ah/spi/.*
+ script: tictactoe_api.APPLICATION 
+
+libraries:
+-name: pycrypto
+ version: latest
+ 
