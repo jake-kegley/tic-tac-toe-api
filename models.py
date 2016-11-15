@@ -1,108 +1,97 @@
-"""models.py - This file contains the class definitions for the Datastore
-entities used by the Game. Because these classes are also regular Python
-classes they can include methods (such as 'to_form' and 'new_game')."""
+#!/usr/bin/python
 
-import random
-from datetime import date
-from protorpc import messages
+# Copyright (C) 2010-2013 Google Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+
+"""Helper model class for TicTacToe API.
+Defines models for persisting and querying score data on a per user basis and
+provides a method for returning a 401 Unauthorized when no current user can be
+determined.
+"""
+
+
+from google.appengine.ext import endpoints
 from google.appengine.ext import ndb
 
-
-class User(ndb.Model):
-    """User profile"""
-    name = ndb.StringProperty(required=True)
-    email =ndb.StringProperty()
+from tictactoe_api_messages import ScoreResponseMessage
 
 
-class Game(ndb.Model):
-    """Game object"""
-    target = ndb.IntegerProperty(required=True)
-    attempts_allowed = ndb.IntegerProperty(required=True)
-    attempts_remaining = ndb.IntegerProperty(required=True, default=5)
-    game_over = ndb.BooleanProperty(required=True, default=False)
-    user = ndb.KeyProperty(required=True, kind='User')
+TIME_FORMAT_STRING = '%b %d, %Y %I:%M:%S %p'
 
-    @classmethod
-    def new_game(cls, user, min, max, attempts):
-        """Creates and returns a new game"""
-        if max < min:
-            raise ValueError('Maximum must be greater than minimum')
-        game = Game(user=user,
-                    target=random.choice(range(1, max + 1)),
-                    attempts_allowed=attempts,
-                    attempts_remaining=attempts,
-                    game_over=False)
-        game.put()
-        return game
 
-    def to_form(self, message):
-        """Returns a GameForm representation of the Game"""
-        form = GameForm()
-        form.urlsafe_key = self.key.urlsafe()
-        form.user_name = self.user.get().name
-        form.attempts_remaining = self.attempts_remaining
-        form.game_over = self.game_over
-        form.message = message
-        return form
-
-    def end_game(self, won=False):
-        """Ends the game - if won is True, the player won. - if won is False,
-        the player lost."""
-        self.game_over = True
-        self.put()
-        # Add the game to the score 'board'
-        score = Score(user=self.user, date=date.today(), won=won,
-                      guesses=self.attempts_allowed - self.attempts_remaining)
-        score.put()
+def get_endpoints_current_user(raise_unauthorized=True):
+    """Returns a current user and (optionally) causes an HTTP 401 if no user.
+    Args:
+        raise_unauthorized: Boolean; defaults to True. If True, this method
+            raises an exception which causes an HTTP 401 Unauthorized to be
+            returned with the request.
+    Returns:
+        The signed in user if there is one, else None if there is no signed in
+        user and raise_unauthorized is False.
+    """
+    current_user = endpoints.get_current_user()
+    if raise_unauthorized and current_user is None:
+        raise endpoints.UnauthorizedException('Invalid token.')
+    return current_user
 
 
 class Score(ndb.Model):
-    """Score object"""
-    user = ndb.KeyProperty(required=True, kind='User')
-    date = ndb.DateProperty(required=True)
-    won = ndb.BooleanProperty(required=True)
-    guesses = ndb.IntegerProperty(required=True)
+    """Model to store scores that have been inserted by users.
+    Since the played property is auto_now_add=True, Scores will document when
+    they were inserted immediately after being stored.
+    """
+    outcome = ndb.StringProperty(required=True)
+    played = ndb.DateTimeProperty(auto_now_add=True)
+    player = ndb.UserProperty(required=True)
 
-    def to_form(self):
-        return ScoreForm(user_name=self.user.get().name, won=self.won,
-                         date=str(self.date), guesses=self.guesses)
+    @property
+    def timestamp(self):
+        """Property to format a datetime object to string."""
+        return self.played.strftime(TIME_FORMAT_STRING)
 
+    def to_message(self):
+        """Turns the Score entity into a ProtoRPC object.
+        This is necessary so the entity can be returned in an API request.
+        Returns:
+            An instance of ScoreResponseMessage with the ID set to the datastore
+            ID of the current entity, the outcome simply the entity's outcome
+            value and the played value equal to the string version of played
+            from the property 'timestamp'.
+        """
+        return ScoreResponseMessage(id=self.key.id(),
+                                    outcome=self.outcome,
+                                    played=self.timestamp)
 
-class GameForm(messages.Message):
-    """GameForm for outbound game state information"""
-    urlsafe_key = messages.StringField(1, required=True)
-    attempts_remaining = messages.IntegerField(2, required=True)
-    game_over = messages.BooleanField(3, required=True)
-    message = messages.StringField(4, required=True)
-    user_name = messages.StringField(5, required=True)
+    @classmethod
+    def put_from_message(cls, message):
+        """Gets the current user and inserts a score.
+        Args:
+            message: A ScoreRequestMessage instance to be inserted.
+        Returns:
+            The Score entity that was inserted.
+        """
+        current_user = get_endpoints_current_user()
+        entity = cls(outcome=message.outcome, player=current_user)
+        entity.put()
+        return entity
 
-
-class NewGameForm(messages.Message):
-    """Used to create a new game"""
-    user_name = messages.StringField(1, required=True)
-    min = messages.IntegerField(2, default=1)
-    max = messages.IntegerField(3, default=10)
-    attempts = messages.IntegerField(4, default=5)
-
-
-class MakeMoveForm(messages.Message):
-    """Used to make a move in an existing game"""
-    guess = messages.IntegerField(1, required=True)
-
-
-class ScoreForm(messages.Message):
-    """ScoreForm for outbound Score information"""
-    user_name = messages.StringField(1, required=True)
-    date = messages.StringField(2, required=True)
-    won = messages.BooleanField(3, required=True)
-    guesses = messages.IntegerField(4, required=True)
-
-
-class ScoreForms(messages.Message):
-    """Return multiple ScoreForms"""
-    items = messages.MessageField(ScoreForm, 1, repeated=True)
-
-
-class StringMessage(messages.Message):
-    """StringMessage-- outbound (single) string message"""
-    message = messages.StringField(1, required=True)
+    @classmethod
+    def query_current_user(cls):
+        """Creates a query for the scores of the current user.
+        Returns:
+            An ndb.Query object bound to the current user. This can be used
+            to filter for other properties or order by them.
+        """
+        current_user = get_endpoints_current_user()
+        return cls.query(cls.player == current_user)
