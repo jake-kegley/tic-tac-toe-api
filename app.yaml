@@ -1,4 +1,4 @@
-application:
+application: my-game-146915
 version: 1
 runtime: python27
 threadsafe: true
